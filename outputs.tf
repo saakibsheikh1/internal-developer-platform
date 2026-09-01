@@ -59,3 +59,26 @@ output "worker_ecr_repository_url" {
   description = "ECR repository URL for the background worker"
   value       = module.worker_ecr.repository_url
 }
+# ============================================================
+# Background Worker Outputs
+# ============================================================
+
+output "worker_queue_url" {
+  description = "SQS queue URL for the background worker"
+  value       = module.background_worker.queue_url
+}
+
+output "worker_dlq_url" {
+  description = "SQS dead letter queue URL"
+  value       = module.background_worker.dlq_url
+}
+
+output "worker_ecs_cluster_name" {
+  description = "ECS cluster name for the background worker"
+  value       = module.background_worker.ecs_cluster_name
+}
+
+output "worker_ecs_service_name" {
+  description = "ECS service name for the background worker"
+  value       = module.background_worker.ecs_service_name
+}
