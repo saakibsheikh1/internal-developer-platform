@@ -1,5 +1,5 @@
 # ============================================================
-# ECR Repository
+# ECR Repository - Web Service
 # ============================================================
 
 module "ecr" {
@@ -9,6 +9,19 @@ module "ecr" {
   team_name       = var.team_name
   environment     = var.environment
 }
+
+# ============================================================
+# ECR Repository - Background Worker
+# ============================================================
+
+module "worker_ecr" {
+  source = "./modules/ecr"
+
+  repository_name = "order-processor"
+  team_name       = var.team_name
+  environment     = var.environment
+}
+
 # ============================================================
 # Network Module
 # ============================================================
@@ -43,4 +56,29 @@ module "web_service" {
   cpu            = var.cpu
   memory         = var.memory
   desired_count  = var.desired_count
+}
+
+# ============================================================
+# Background Worker Module
+# ============================================================
+
+module "background_worker" {
+  source = "./modules/background-worker"
+
+  service_name = "order-processor"
+  team_name    = var.team_name
+  environment  = var.environment
+
+  docker_image = var.worker_docker_image
+
+  vpc_id             = module.network.vpc_id
+  private_subnet_ids = module.network.private_subnet_ids
+
+  queue_name = var.worker_queue_name
+
+  cpu           = 256
+  memory        = 512
+  desired_count = 1
+  min_capacity  = 1
+  max_capacity  = 5
 }

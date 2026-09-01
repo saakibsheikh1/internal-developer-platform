@@ -61,3 +61,18 @@ variable "desired_count" {
   type        = number
   default     = 2
 }
+
+# ============================================================
+# Background Worker
+# ============================================================
+
+variable "worker_queue_name" {
+  description = "SQS queue name for the background worker"
+  type        = string
+  default     = "order-processor-dev-jobs"
+}
+
+variable "worker_docker_image" {
+  description = "Docker image for the background worker"
+  type        = string
+}

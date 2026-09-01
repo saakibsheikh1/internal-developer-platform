@@ -50,3 +50,12 @@ output "cloudwatch_log_group_name" {
   description = "CloudWatch log group"
   value       = module.web_service.cloudwatch_log_group_name
 }
+
+# ============================================================
+# Background Worker ECR Outputs
+# ============================================================
+
+output "worker_ecr_repository_url" {
+  description = "ECR repository URL for the background worker"
+  value       = module.worker_ecr.repository_url
+}
