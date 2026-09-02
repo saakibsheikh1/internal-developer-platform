@@ -33,3 +33,5 @@ cosign.key
 cosign.password
 # Terraform generated files for signature test
 governance/signature-test/.terraform/
+# Generated Lambda deployment package
+modules/scheduled-job/lambda_function.zip
