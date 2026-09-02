@@ -1,6 +1,6 @@
-@"
 apiVersion: backstage.io/v1alpha1
 kind: Component
+
 metadata:
   name: payment-api
   description: Payment API web service
@@ -10,7 +10,8 @@ metadata:
     - fargate
     - web-service
   annotations:
-    backstage.io/techdocs-ref: dir:.
+    idp.io/deployment-status: active
+    idp.io/techdocs: docs/payment-api/index.md
   links:
     - url: https://example.com/runbooks/payment-api
       title: Runbook
@@ -18,6 +19,7 @@ metadata:
     - url: https://grafana.example.com/d/payment-api
       title: Grafana Dashboard
       icon: dashboard
+
 spec:
   type: service
   lifecycle: production
@@ -25,4 +27,3 @@ spec:
   system: internal-developer-platform
   dependsOn:
     - resource:aws/ecs
-"@ | Set-Content .\catalogue\backstage\payment-api\catalog-info.yaml

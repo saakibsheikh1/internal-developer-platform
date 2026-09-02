@@ -1,6 +1,6 @@
-@"
 apiVersion: backstage.io/v1alpha1
 kind: Component
+
 metadata:
   name: inventory-sync
   description: Scheduled inventory synchronization job
@@ -9,6 +9,8 @@ metadata:
     - lambda
     - eventbridge
     - scheduled-job
+  annotations:
+    idp.io/deployment-status: active
   links:
     - url: https://example.com/runbooks/inventory-sync
       title: Runbook
@@ -16,6 +18,7 @@ metadata:
     - url: https://grafana.example.com/d/inventory-sync
       title: Grafana Dashboard
       icon: dashboard
+
 spec:
   type: service
   lifecycle: production
@@ -24,4 +27,3 @@ spec:
   dependsOn:
     - resource:aws/lambda
     - resource:aws/eventbridge
-"@ | Set-Content .\catalogue\backstage\inventory-sync\catalog-info.yaml
