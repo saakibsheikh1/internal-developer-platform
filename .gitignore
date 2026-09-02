@@ -31,3 +31,5 @@ cosign.key
 
 # Cosign password files
 cosign.password
+# Terraform generated files for signature test
+governance/signature-test/.terraform/

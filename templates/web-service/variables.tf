@@ -72,3 +72,8 @@ variable "desired_count" {
   type        = number
   default     = 2
 }
+variable "cosign_public_key_path" {
+  description = "Path to the Cosign public key used to verify the container image"
+  type        = string
+  default     = "../../cosign.pub"
+}

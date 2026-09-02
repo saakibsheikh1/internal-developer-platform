@@ -4,7 +4,7 @@ data "external" "cosign_verify" {
     "-ExecutionPolicy",
     "Bypass",
     "-File",
-    "${path.root}/governance/verify-image-signature.ps1",
+    "${path.module}/../../governance/verify-image-signature.ps1",
     "-Image",
     var.docker_image,
     "-PublicKey",

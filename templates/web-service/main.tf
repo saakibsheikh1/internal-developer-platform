@@ -1,3 +1,10 @@
+module "image_signature" {
+  source = "../../modules/image-signature"
+
+  docker_image    = var.docker_image
+  public_key_path = var.cosign_public_key_path
+}
+
 module "web_service" {
   source = "../../modules/ecs-service"
 
@@ -13,4 +20,6 @@ module "web_service" {
   cpu                = var.cpu
   memory             = var.memory
   desired_count      = var.desired_count
+
+  depends_on = [module.image_signature]
 }
