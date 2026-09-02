@@ -1,6 +1,12 @@
+locals {
+  powershell_command = var.powershell_command != null ? var.powershell_command : (
+    substr(abspath(path.root), 0, 1) == "/" ? "pwsh" : "powershell"
+  )
+}
+
 data "external" "cosign_verify" {
   program = [
-    "powershell",
+    local.powershell_command,
     "-ExecutionPolicy",
     "Bypass",
     "-File",
