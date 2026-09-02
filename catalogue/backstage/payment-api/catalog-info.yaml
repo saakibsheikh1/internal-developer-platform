@@ -1,0 +1,28 @@
+@"
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: payment-api
+  description: Payment API web service
+  tags:
+    - aws
+    - ecs
+    - fargate
+    - web-service
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  links:
+    - url: https://example.com/runbooks/payment-api
+      title: Runbook
+      icon: docs
+    - url: https://grafana.example.com/d/payment-api
+      title: Grafana Dashboard
+      icon: dashboard
+spec:
+  type: service
+  lifecycle: production
+  owner: payments
+  system: internal-developer-platform
+  dependsOn:
+    - resource:aws/ecs
+"@ | Set-Content .\catalogue\backstage\payment-api\catalog-info.yaml

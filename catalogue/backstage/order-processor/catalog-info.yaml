@@ -1,0 +1,27 @@
+@"
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: order-processor
+  description: Order processing background worker
+  tags:
+    - aws
+    - ecs
+    - fargate
+    - background-worker
+  links:
+    - url: https://example.com/runbooks/order-processor
+      title: Runbook
+      icon: docs
+    - url: https://grafana.example.com/d/order-processor
+      title: Grafana Dashboard
+      icon: dashboard
+spec:
+  type: service
+  lifecycle: production
+  owner: payments
+  system: internal-developer-platform
+  dependsOn:
+    - resource:aws/sqs
+    - resource:aws/ecs
+"@ | Set-Content .\catalogue\backstage\order-processor\catalog-info.yaml
