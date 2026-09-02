@@ -5,6 +5,11 @@
 resource "aws_ecs_cluster" "this" {
   name = "${var.service_name}-${var.environment}-cluster"
 
+  setting {
+    name  = "containerInsights"
+    value = "enabled"
+  }
+
   tags = {
     Name        = "${var.service_name}-${var.environment}-cluster"
     Team        = var.team_name

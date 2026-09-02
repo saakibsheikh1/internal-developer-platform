@@ -26,6 +26,11 @@ variable "docker_image" {
 variable "alert_email" {
   description = "Email address for service alerts"
   type        = string
+
+  validation {
+    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.alert_email))
+    error_message = "alert_email must be a valid email address."
+  }
 }
 
 variable "aws_region" {
@@ -72,8 +77,21 @@ variable "desired_count" {
   type        = number
   default     = 2
 }
+
 variable "cosign_public_key_path" {
   description = "Path to the Cosign public key used to verify the container image"
   type        = string
   default     = "../../cosign.pub"
+}
+
+variable "route53_zone_id" {
+  description = "Optional Route53 hosted zone ID for the service DNS record"
+  type        = string
+  default     = null
+}
+
+variable "route53_record_name" {
+  description = "Optional Route53 DNS record name"
+  type        = string
+  default     = null
 }
