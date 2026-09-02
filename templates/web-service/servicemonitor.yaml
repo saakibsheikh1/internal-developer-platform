@@ -1,0 +1,15 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: ${service_name}
+  labels:
+    team: ${team_name}
+    managed-by: idp
+spec:
+  selector:
+    matchLabels:
+      app: ${service_name}
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
