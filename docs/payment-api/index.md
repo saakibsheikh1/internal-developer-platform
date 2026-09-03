@@ -6,10 +6,16 @@
 - **Owner:** payments
 - **Environment:** dev
 - **Template:** web-service
+- **Template Version:** 1.0.0
 
 ## Platform
 
 This service was provisioned through the Internal Developer Platform.
+
+## Golden Path Governance
+
+The service uses the approved golden-path template version
+1.0.0.
 
 ## Infrastructure
 

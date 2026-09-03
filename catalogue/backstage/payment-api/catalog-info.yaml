@@ -14,6 +14,7 @@ metadata:
   annotations:
     idp/status: active
     idp/environment: dev
+    idp/template-version: 1.0.0
     backstage.io/techdocs-ref: dir:../../../docs/payment-api
 
   links:
