@@ -1,0 +1,68 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PlatformDiscovery",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:Describe*",
+        "ecs:Describe*",
+        "ecs:List*",
+        "ecr:Describe*",
+        "ecr:List*",
+        "sqs:Get*",
+        "sqs:List*",
+        "lambda:Get*",
+        "lambda:List*",
+        "events:Describe*",
+        "events:List*",
+        "scheduler:Get*",
+        "scheduler:List*",
+        "cloudwatch:Describe*",
+        "cloudwatch:List*",
+        "logs:Describe*",
+        "s3:Get*",
+        "s3:List*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "PlatformProvisioning",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:*",
+        "ecr:*",
+        "sqs:*",
+        "lambda:*",
+        "events:*",
+        "scheduler:*",
+        "cloudwatch:*",
+        "logs:*",
+        "sns:*",
+        "s3:*",
+        "ec2:CreateTags",
+        "ec2:DeleteTags"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "PassPlatformRoles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:PassRole"
+      ],
+      "Resource": [
+        "arn:aws:iam::495278513365:role/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": [
+            "ecs-tasks.amazonaws.com",
+            "lambda.amazonaws.com",
+            "scheduler.amazonaws.com"
+          ]
+        }
+      }
+    }
+  ]
+}

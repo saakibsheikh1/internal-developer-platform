@@ -1,0 +1,5 @@
+﻿service_name: payment-api
+template_type: web-service
+team_name: payments
+docker_image: 495278513365.dkr.ecr.ap-south-1.amazonaws.com/payment-api:1.0.1
+environment: dev

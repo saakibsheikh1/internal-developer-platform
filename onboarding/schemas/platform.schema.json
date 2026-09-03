@@ -1,0 +1,45 @@
+﻿{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Internal Developer Platform Service",
+  "type": "object",
+  "required": [
+    "service_name",
+    "template_type",
+    "team_name",
+    "docker_image",
+    "environment"
+  ],
+  "properties": {
+    "service_name": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "minLength": 3,
+      "maxLength": 40
+    },
+    "template_type": {
+      "type": "string",
+      "enum": [
+        "web-service",
+        "background-worker",
+        "scheduled-job"
+      ]
+    },
+    "team_name": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "docker_image": {
+      "type": "string",
+      "minLength": 1
+    },
+    "environment": {
+      "type": "string",
+      "enum": [
+        "dev",
+        "staging",
+        "prod"
+      ]
+    }
+  },
+  "additionalProperties": false
+}
