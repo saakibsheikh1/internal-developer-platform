@@ -1,0 +1,49 @@
+{
+  "dashboard": {
+    "name": "IDP Platform Health & Adoption",
+    "description": "Internal Developer Platform health, adoption, deployment performance, compliance, catalogue completeness and template distribution.",
+    "metrics_namespace": "IDP/Platform",
+    "sections": [
+      {
+        "title": "Adoption",
+        "metrics": [
+          "ServicesOnboardedCumulative",
+          "ServicesOnboardedPerWeek"
+        ]
+      },
+      {
+        "title": "Deployment Performance",
+        "metrics": [
+          "TimeToDeployP50",
+          "TimeToDeployP99",
+          "AverageTimeToDeploy"
+        ]
+      },
+      {
+        "title": "Golden Path Compliance",
+        "metrics": [
+          "GoldenPathComplianceRate"
+        ]
+      },
+      {
+        "title": "Catalogue Completeness",
+        "metrics": [
+          "CatalogueCompletenessRate"
+        ]
+      },
+      {
+        "title": "Template Adoption",
+        "metrics": [
+          "TemplateUsage"
+        ]
+      },
+      {
+        "title": "Platform Health",
+        "metrics": [
+          "UnregisteredServices",
+          "OnboardingPipelineFailure"
+        ]
+      }
+    ]
+  }
+}

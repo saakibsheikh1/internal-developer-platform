@@ -1,0 +1,43 @@
+{
+  "services": [
+    {
+      "name": "payment-api",
+      "owner": "payments",
+      "template_type": "web-service",
+      "template_version": "1.0.0",
+      "environment": "dev",
+      "deployment_status": "active",
+      "onboarding_started_at": "2026-09-03T16:00:00Z",
+      "deployment_completed_at": "2026-09-03T16:04:32Z",
+      "golden_path_compliant": true,
+      "runbook": "docs/payment-api/runbook.md",
+      "dashboard": "monitoring/grafana/payment-api.json"
+    },
+    {
+      "name": "order-processor",
+      "owner": "payments",
+      "template_type": "background-worker",
+      "template_version": "1.0.0",
+      "environment": "dev",
+      "deployment_status": "active",
+      "onboarding_started_at": "2026-09-02T14:00:00Z",
+      "deployment_completed_at": "2026-09-02T14:06:15Z",
+      "golden_path_compliant": true,
+      "runbook": "docs/order-processor/runbook.md",
+      "dashboard": "monitoring/grafana/order-processor.json"
+    },
+    {
+      "name": "inventory-sync",
+      "owner": "inventory",
+      "template_type": "scheduled-job",
+      "template_version": "1.0.0",
+      "environment": "dev",
+      "deployment_status": "active",
+      "onboarding_started_at": "2026-09-01T10:00:00Z",
+      "deployment_completed_at": "2026-09-01T10:03:48Z",
+      "golden_path_compliant": true,
+      "runbook": "docs/inventory-sync/runbook.md",
+      "dashboard": "monitoring/grafana/inventory-sync.json"
+    }
+  ]
+}

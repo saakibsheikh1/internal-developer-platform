@@ -35,3 +35,4 @@ cosign.password
 governance/signature-test/.terraform/
 # Generated Lambda deployment package
 modules/scheduled-job/lambda_function.zip
+lambda-response.json
