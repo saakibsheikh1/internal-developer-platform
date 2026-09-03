@@ -49,6 +49,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -109,7 +110,7 @@ jobs:
 
 
   # ============================================================
-  # STAGE 3 - DISCOVER / BOOTSTRAP PLATFORM NETWORK
+  # STAGE 3 - PLATFORM NETWORK BOOTSTRAP
   # ============================================================
   discover:
     name: Bootstrap platform network
@@ -123,6 +124,7 @@ jobs:
       public_subnet_ids: ${{ steps.network.outputs.public_subnet_ids }}
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -197,11 +199,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # ----------------------------------------------------------
+      # AWS OIDC
+      # ----------------------------------------------------------
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v5
         with:
@@ -209,11 +215,17 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: IDPServiceOnboarding
 
+      # ----------------------------------------------------------
+      # Terraform
+      # ----------------------------------------------------------
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.15.9
 
+      # ----------------------------------------------------------
+      # Python
+      # ----------------------------------------------------------
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -263,18 +275,19 @@ jobs:
                   )
 
           print("Configuration loaded:")
+
           for key in required:
               print(f"{key}: {config[key]}")
           PY
 
       # ----------------------------------------------------------
-      # Install Cosign
+      # Cosign
       # ----------------------------------------------------------
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3.8.1
 
       # ----------------------------------------------------------
-      # Login to ECR
+      # ECR authentication
       # ----------------------------------------------------------
       - name: Login to Amazon ECR
         shell: bash
@@ -287,14 +300,16 @@ jobs:
               "495278513365.dkr.ecr.ap-south-1.amazonaws.com"
 
       # ----------------------------------------------------------
-      # Verify immutable Cosign signature
+      # Verify Cosign signature
       # ----------------------------------------------------------
       - name: Verify signed container image
         shell: bash
         env:
           IMAGE: ${{ steps.config.outputs.docker_image }}
         run: |
-          echo "Resolving immutable image digest for ${IMAGE}"
+          echo "============================================"
+          echo "Resolving immutable image digest"
+          echo "============================================"
 
           REGISTRY="${IMAGE%%/*}"
           IMAGE_PATH="${IMAGE#*/}"
@@ -320,23 +335,64 @@ jobs:
 
           IMAGE_WITH_DIGEST="${REGISTRY}/${REPOSITORY}@${IMAGE_DIGEST}"
 
+          echo ""
           echo "Resolved immutable image:"
           echo "${IMAGE_WITH_DIGEST}"
 
-          echo "Verifying Cosign signature..."
+          echo ""
+          echo "============================================"
+          echo "ECR image details"
+          echo "============================================"
+
+          aws ecr describe-images \
+            --region "${AWS_REGION}" \
+            --repository-name "${REPOSITORY}" \
+            --image-ids imageDigest="${IMAGE_DIGEST}" \
+            --query 'imageDetails[0].{Digest:imageDigest,Tags:imageTags,Size:imageSizeInBytes}' \
+            --output json
+
+          echo ""
+          echo "============================================"
+          echo "Cosign version"
+          echo "============================================"
+
+          cosign version
+
+          echo ""
+          echo "============================================"
+          echo "Cosign public key"
+          echo "============================================"
+
+          if [ ! -f "./cosign.pub" ]; then
+            echo "ERROR: cosign.pub was not found in repository."
+            exit 1
+          fi
+
+          ls -l ./cosign.pub
+
+          echo ""
+          echo "============================================"
+          echo "Cosign triangulate"
+          echo "============================================"
+
+          cosign triangulate "${IMAGE_WITH_DIGEST}" || true
+
+          echo ""
+          echo "============================================"
+          echo "Verifying Cosign signature"
+          echo "============================================"
 
           cosign verify \
             --key ./cosign.pub \
             "${IMAGE_WITH_DIGEST}"
 
+          echo ""
           echo "============================================"
           echo "Cosign signature verification PASSED"
           echo "============================================"
 
-          echo "image_digest=${IMAGE_DIGEST}" >> "${GITHUB_OUTPUT}"
-
       # ----------------------------------------------------------
-      # Select template
+      # Select Terraform template
       # ----------------------------------------------------------
       - name: Select Terraform template
         id: template
@@ -345,6 +401,7 @@ jobs:
           TEMPLATE_TYPE: ${{ steps.config.outputs.template_type }}
         run: |
           case "${TEMPLATE_TYPE}" in
+
             web-service)
               TEMPLATE_PATH="templates/web-service"
               ;;
@@ -361,6 +418,7 @@ jobs:
               echo "ERROR: Unsupported template type: ${TEMPLATE_TYPE}"
               exit 1
               ;;
+
           esac
 
           echo "template_path=${TEMPLATE_PATH}" >> "${GITHUB_OUTPUT}"
@@ -388,11 +446,8 @@ jobs:
           import json
           import os
 
-          service_name = os.environ["SERVICE_NAME"]
-          template_type = os.environ["TEMPLATE_TYPE"] if "TEMPLATE_TYPE" in os.environ else ""
-
           data = {
-              "service_name": service_name,
+              "service_name": os.environ["SERVICE_NAME"],
               "team_name": os.environ["TEAM_NAME"],
               "docker_image": os.environ["DOCKER_IMAGE"],
               "environment": os.environ["ENVIRONMENT"],
@@ -415,7 +470,7 @@ jobs:
           PY
 
       # ----------------------------------------------------------
-      # Terraform initialization
+      # Terraform init
       # ----------------------------------------------------------
       - name: Terraform init
         working-directory: ${{ steps.template.outputs.template_path }}
@@ -434,7 +489,8 @@ jobs:
       # ----------------------------------------------------------
       - name: Terraform validate
         working-directory: ${{ steps.template.outputs.template_path }}
-        run: terraform validate
+        run: |
+          terraform validate
 
       # ----------------------------------------------------------
       # Copy generated variables
@@ -453,19 +509,24 @@ jobs:
         env:
           ACTION: ${{ inputs.action || 'apply' }}
         run: |
+
           if [ "${ACTION}" = "destroy" ]; then
+
             terraform plan \
               -destroy \
               -var-file="generated.tfvars.json" \
               -out=tfplan
+
           else
+
             terraform plan \
               -var-file="generated.tfvars.json" \
               -out=tfplan
+
           fi
 
       # ----------------------------------------------------------
-      # Terraform apply / destroy
+      # Terraform apply
       # ----------------------------------------------------------
       - name: Terraform apply
         if: ${{ (inputs.action || 'apply') == 'apply' }}
@@ -475,6 +536,9 @@ jobs:
             -auto-approve \
             tfplan
 
+      # ----------------------------------------------------------
+      # Terraform destroy / offboarding
+      # ----------------------------------------------------------
       - name: Terraform destroy
         if: ${{ inputs.action == 'destroy' }}
         working-directory: ${{ steps.template.outputs.template_path }}
@@ -485,7 +549,7 @@ jobs:
             tfplan
 
       # ----------------------------------------------------------
-      # Generate catalogue entry
+      # Generate Backstage catalogue entry
       # ----------------------------------------------------------
       - name: Generate catalogue entry
         if: ${{ (inputs.action || 'apply') == 'apply' }}
@@ -496,35 +560,56 @@ jobs:
           TEMPLATE_TYPE: ${{ steps.config.outputs.template_type }}
           ENVIRONMENT: ${{ steps.config.outputs.environment }}
         run: |
+
           mkdir -p "catalogue/backstage/${SERVICE_NAME}"
           mkdir -p "docs/${SERVICE_NAME}"
 
           cat > "catalogue/backstage/${SERVICE_NAME}/catalog-info.yaml" <<EOF
           apiVersion: backstage.io/v1alpha1
           kind: Component
+
           metadata:
             name: ${SERVICE_NAME}
+
             description: ${SERVICE_NAME} managed by the Internal Developer Platform
+
             tags:
               - aws
               - ${TEMPLATE_TYPE}
               - ${ENVIRONMENT}
+
             annotations:
               idp/status: active
               idp/environment: ${ENVIRONMENT}
               backstage.io/techdocs-ref: dir:../../../docs/${SERVICE_NAME}
+
             links:
               - url: https://grafana.example.com/d/${SERVICE_NAME}
                 title: Grafana Dashboard
                 icon: dashboard
+
               - url: https://github.com/saakibsheikh1/internal-developer-platform
                 title: Repository
                 icon: github
+
           spec:
             type: service
             lifecycle: production
             owner: ${TEAM_NAME}
           EOF
+
+      # ----------------------------------------------------------
+      # Generate TechDocs
+      # ----------------------------------------------------------
+      - name: Generate TechDocs
+        if: ${{ (inputs.action || 'apply') == 'apply' }}
+        shell: bash
+        env:
+          SERVICE_NAME: ${{ steps.config.outputs.service_name }}
+          TEAM_NAME: ${{ steps.config.outputs.team_name }}
+          TEMPLATE_TYPE: ${{ steps.config.outputs.template_type }}
+          ENVIRONMENT: ${{ steps.config.outputs.environment }}
+        run: |
 
           cat > "docs/${SERVICE_NAME}/index.md" <<EOF
           # ${SERVICE_NAME}
@@ -540,9 +625,12 @@ jobs:
 
           This service was provisioned through the Internal Developer Platform.
 
-          ## Operations
+          ## Infrastructure
 
-          Terraform state is stored in the dedicated onboarding state prefix:
+          Terraform infrastructure is provisioned through the selected
+          golden-path template.
+
+          ## Terraform State
 
           \`idp-onboarding/${ENVIRONMENT}/${SERVICE_NAME}/terraform.tfstate\`
 
@@ -554,11 +642,16 @@ jobs:
 
           ## Runbook
 
-          - Check ECS service health.
-          - Check CloudWatch alarms.
-          - Check application logs.
-          - Check ALB target health where applicable.
-          - Verify container image and deployment status.
+          1. Check ECS service health.
+          2. Check CloudWatch alarms.
+          3. Check application logs.
+          4. Check ALB target health where applicable.
+          5. Verify the container image and deployment status.
+
+          ## Security
+
+          Container images are required to pass Cosign signature verification
+          before Terraform provisioning proceeds.
           EOF
 
       # ----------------------------------------------------------
@@ -572,19 +665,23 @@ jobs:
           ENVIRONMENT: ${{ steps.config.outputs.environment }}
           TEAM_NAME: ${{ steps.config.outputs.team_name }}
         run: |
-          mkdir -p "monitoring/grafana"
+
+          mkdir -p monitoring/grafana
 
           cat > "monitoring/grafana/${SERVICE_NAME}.json" <<EOF
           {
             "dashboard": {
               "title": "${SERVICE_NAME} - Platform Dashboard",
               "uid": "${SERVICE_NAME}",
+
               "tags": [
                 "idp",
                 "${ENVIRONMENT}",
                 "${TEAM_NAME}"
               ],
+
               "timezone": "browser",
+
               "panels": [
                 {
                   "type": "timeseries",
@@ -612,7 +709,7 @@ jobs:
           EOF
 
       # ----------------------------------------------------------
-      # Publish SNS onboarding summary
+      # SNS summary
       # ----------------------------------------------------------
       - name: Publish onboarding summary
         if: ${{ always() }}
@@ -624,6 +721,7 @@ jobs:
           ENVIRONMENT: ${{ steps.config.outputs.environment }}
           ACTION: ${{ inputs.action || 'apply' }}
         run: |
+
           TOPIC_NAME="idp-onboarding-summary"
 
           TOPIC_ARN=$(aws sns create-topic \
@@ -650,14 +748,15 @@ jobs:
             --region "${AWS_REGION}"
 
       # ----------------------------------------------------------
-      # Git commit catalogue and dashboard
+      # Commit catalogue / TechDocs / Grafana
       # ----------------------------------------------------------
-      - name: Commit catalogue and dashboard
+      - name: Commit catalogue and platform artifacts
         if: ${{ (inputs.action || 'apply') == 'apply' }}
         shell: bash
         env:
           SERVICE_NAME: ${{ steps.config.outputs.service_name }}
         run: |
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -667,16 +766,20 @@ jobs:
             "monitoring/grafana/${SERVICE_NAME}.json"
 
           if git diff --cached --quiet; then
+
             echo "No catalogue/dashboard changes to commit."
+
           else
+
             git commit \
               -m "chore(idp): onboard ${SERVICE_NAME}"
 
             git push
+
           fi
 
       # ----------------------------------------------------------
-      # GitHub job summary
+      # GitHub Actions summary
       # ----------------------------------------------------------
       - name: Publish GitHub Actions summary
         if: always()
@@ -688,6 +791,7 @@ jobs:
           ENVIRONMENT: ${{ steps.config.outputs.environment }}
           ACTION: ${{ inputs.action || 'apply' }}
         run: |
+
           {
             echo "# IDP Platform Onboarding"
             echo
@@ -717,4 +821,5 @@ jobs:
             echo "- TechDocs: enabled"
             echo "- Grafana dashboard definition: generated"
             echo "- SNS summary: enabled"
+            echo "- Terraform offboarding: enabled"
           } >> "${GITHUB_STEP_SUMMARY}"
