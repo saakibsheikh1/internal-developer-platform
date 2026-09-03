@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - "onboarding/examples/platform.yaml"
-      - "onboarding/schemas/**"
+      - "onboarding/schemas/platform.schema.json"
       - "templates/**"
       - "modules/**"
       - ".github/workflows/platform-onboarding.yml"
@@ -12,36 +12,40 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: "Onboarding action"
+        description: "Terraform action"
         required: true
-        default: "apply"
         type: choice
         options:
           - apply
           - destroy
+        default: apply
 
       config_file:
         description: "Platform configuration file"
         required: true
+        type: string
         default: "onboarding/examples/platform.yaml"
-
-concurrency:
-  group: idp-platform-onboarding
-  cancel-in-progress: false
 
 permissions:
   id-token: write
   contents: write
 
+concurrency:
+  group: idp-platform-onboarding
+  cancel-in-progress: false
+
 env:
   AWS_REGION: ap-south-1
   AWS_ROLE_ARN: arn:aws:iam::495278513365:role/IDP-GitHubActions-Onboarding
-  TF_STATE_BUCKET: sakib-terraform-state-495278513365
+  STATE_BUCKET: sakib-terraform-state-495278513365
 
 jobs:
 
+  # ============================================================
+  # STAGE 3 - VALIDATE PLATFORM CONFIGURATION
+  # ============================================================
   validate:
-    name: Validate platform.yaml
+    name: Validate platform configuration
     runs-on: ubuntu-latest
 
     steps:
@@ -58,102 +62,157 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyyaml jsonschema
 
-      - name: Validate platform configuration
+      - name: Validate platform.yaml
+        shell: bash
+        env:
+          CONFIG_FILE: ${{ inputs.config_file || 'onboarding/examples/platform.yaml' }}
         run: |
           python - <<'PY'
           import json
+          import os
+          import sys
           import yaml
-          from pathlib import Path
           from jsonschema import validate
 
-          config_path = Path("onboarding/examples/platform.yaml")
-          schema_path = Path("onboarding/schemas/platform.schema.json")
+          config_file = os.environ["CONFIG_FILE"]
 
-          with config_path.open(encoding="utf-8-sig") as f:
+          print(f"Validating configuration: {config_file}")
+
+          with open(config_file, "r", encoding="utf-8-sig") as f:
               config = yaml.safe_load(f)
 
-          with schema_path.open(encoding="utf-8-sig") as f:
+          with open(
+              "onboarding/schemas/platform.schema.json",
+              "r",
+              encoding="utf-8-sig"
+          ) as f:
               schema = json.load(f)
 
           validate(instance=config, schema=schema)
 
-          print("Platform configuration:")
+          required = [
+              "service_name",
+              "template_type",
+              "team_name",
+              "docker_image",
+              "environment"
+          ]
+
+          for field in required:
+              if not config.get(field):
+                  print(f"ERROR: Missing required field: {field}")
+                  sys.exit(1)
+
+          print("Platform configuration is valid.")
           print(json.dumps(config, indent=2))
-          print("Schema validation: PASSED")
           PY
 
+
+  # ============================================================
+  # STAGE 3 - DISCOVER / BOOTSTRAP PLATFORM NETWORK
+  # ============================================================
   discover:
-    name: Discover platform network
+    name: Bootstrap platform network
     needs: validate
     runs-on: ubuntu-latest
 
     outputs:
       vpc_id: ${{ steps.network.outputs.vpc_id }}
-      private_subnets: ${{ steps.network.outputs.private_subnets }}
-      public_subnets: ${{ steps.network.outputs.public_subnets }}
+      vpc_cidr: ${{ steps.network.outputs.vpc_cidr }}
+      private_subnet_ids: ${{ steps.network.outputs.private_subnet_ids }}
+      public_subnet_ids: ${{ steps.network.outputs.public_subnet_ids }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+          role-session-name: IDPPlatformBootstrap
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.9
 
-      - name: Bootstrap platform network
+      - name: Terraform init
         working-directory: onboarding/platform-bootstrap
         run: |
-          terraform init -reconfigure \
-            -backend-config="bucket=${TF_STATE_BUCKET}" \
+          terraform init \
+            -backend-config="bucket=${STATE_BUCKET}" \
             -backend-config="key=idp-onboarding/platform-bootstrap/terraform.tfstate" \
             -backend-config="region=${AWS_REGION}" \
             -backend-config="use_lockfile=true"
 
-          terraform apply -auto-approve \
-            -var="aws_region=${AWS_REGION}" \
-            -var="environment=dev" \
-            -var="vpc_cidr=10.0.0.0/16"
+      - name: Terraform validate
+        working-directory: onboarding/platform-bootstrap
+        run: terraform validate
 
-      - name: Read network outputs
-        id: network
+      - name: Terraform plan
         working-directory: onboarding/platform-bootstrap
         run: |
-          VPC_ID=$(terraform output -raw vpc_id)
-          PRIVATE_SUBNETS=$(terraform output -json private_subnet_ids | jq -c .)
-          PUBLIC_SUBNETS=$(terraform output -json public_subnet_ids | jq -c .)
+          terraform plan \
+            -out=tfplan
 
-          echo "vpc_id=${VPC_ID}" >> "$GITHUB_OUTPUT"
-          echo "private_subnets=${PRIVATE_SUBNETS}" >> "$GITHUB_OUTPUT"
-          echo "public_subnets=${PUBLIC_SUBNETS}" >> "$GITHUB_OUTPUT"
+      - name: Terraform apply
+        working-directory: onboarding/platform-bootstrap
+        run: |
+          terraform apply \
+            -auto-approve \
+            tfplan
+
+      - name: Export network outputs
+        id: network
+        working-directory: onboarding/platform-bootstrap
+        shell: bash
+        run: |
+          VPC_ID=$(terraform output -raw vpc_id)
+          VPC_CIDR=$(terraform output -raw vpc_cidr)
+
+          PRIVATE_SUBNET_IDS=$(terraform output -json private_subnet_ids | jq -c '.')
+          PUBLIC_SUBNET_IDS=$(terraform output -json public_subnet_ids | jq -c '.')
+
+          echo "vpc_id=${VPC_ID}" >> "${GITHUB_OUTPUT}"
+          echo "vpc_cidr=${VPC_CIDR}" >> "${GITHUB_OUTPUT}"
+          echo "private_subnet_ids=${PRIVATE_SUBNET_IDS}" >> "${GITHUB_OUTPUT}"
+          echo "public_subnet_ids=${PUBLIC_SUBNET_IDS}" >> "${GITHUB_OUTPUT}"
 
           echo "VPC: ${VPC_ID}"
-          echo "Private subnets: ${PRIVATE_SUBNETS}"
-          echo "Public subnets: ${PUBLIC_SUBNETS}"
+          echo "Private subnets: ${PRIVATE_SUBNET_IDS}"
+          echo "Public subnets: ${PUBLIC_SUBNET_IDS}"
 
+
+  # ============================================================
+  # STAGE 3 - AUTOMATED SERVICE ONBOARDING
+  # ============================================================
   onboard:
-    name: Provision service
+    name: Onboard service
     needs:
       - validate
       - discover
+
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+          role-session-name: IDPServiceOnboarding
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.9
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -165,258 +224,497 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyyaml
 
-      - name: Install Cosign
-        uses: sigstore/cosign-installer@v3.8.1
-
-      - name: Login to Amazon ECR
-        shell: bash
-        run: |
-          aws ecr get-login-password --region "${AWS_REGION}" \
-            | docker login \
-              --username AWS \
-              --password-stdin \
-              "495278513365.dkr.ecr.${AWS_REGION}.amazonaws.com"
-
+      # ----------------------------------------------------------
+      # Read platform.yaml
+      # ----------------------------------------------------------
       - name: Read platform configuration
         id: config
         shell: bash
         env:
-          CONFIG_FILE: onboarding/examples/platform.yaml
+          CONFIG_FILE: ${{ inputs.config_file || 'onboarding/examples/platform.yaml' }}
         run: |
-          SERVICE_NAME=$(python -c "import yaml; print(yaml.safe_load(open('${CONFIG_FILE}', encoding='utf-8-sig'))['service_name'])")
-          TEMPLATE_TYPE=$(python -c "import yaml; print(yaml.safe_load(open('${CONFIG_FILE}', encoding='utf-8-sig'))['template_type'])")
-          TEAM_NAME=$(python -c "import yaml; print(yaml.safe_load(open('${CONFIG_FILE}', encoding='utf-8-sig'))['team_name'])")
-          IMAGE=$(python -c "import yaml; print(yaml.safe_load(open('${CONFIG_FILE}', encoding='utf-8-sig'))['docker_image'])")
-          ENVIRONMENT=$(python -c "import yaml; print(yaml.safe_load(open('${CONFIG_FILE}', encoding='utf-8-sig'))['environment'])")
+          python - <<'PY'
+          import os
+          import yaml
 
-          echo "service_name=${SERVICE_NAME}" >> "$GITHUB_OUTPUT"
-          echo "template_type=${TEMPLATE_TYPE}" >> "$GITHUB_OUTPUT"
-          echo "team_name=${TEAM_NAME}" >> "$GITHUB_OUTPUT"
-          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
-          echo "environment=${ENVIRONMENT}" >> "$GITHUB_OUTPUT"
+          config_file = os.environ["CONFIG_FILE"]
 
+          with open(config_file, "r", encoding="utf-8-sig") as f:
+              config = yaml.safe_load(f)
+
+          required = [
+              "service_name",
+              "template_type",
+              "team_name",
+              "docker_image",
+              "environment"
+          ]
+
+          for field in required:
+              if not config.get(field):
+                  raise SystemExit(
+                      f"Missing required field: {field}"
+                  )
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              for key in required:
+                  output.write(
+                      f"{key}={config[key]}\n"
+                  )
+
+          print("Configuration loaded:")
+          for key in required:
+              print(f"{key}: {config[key]}")
+          PY
+
+      # ----------------------------------------------------------
+      # Install Cosign
+      # ----------------------------------------------------------
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.8.1
+
+      # ----------------------------------------------------------
+      # Login to ECR
+      # ----------------------------------------------------------
+      - name: Login to Amazon ECR
+        shell: bash
+        run: |
+          aws ecr get-login-password \
+            --region "${AWS_REGION}" \
+            | docker login \
+              --username AWS \
+              --password-stdin \
+              "495278513365.dkr.ecr.ap-south-1.amazonaws.com"
+
+      # ----------------------------------------------------------
+      # Verify immutable Cosign signature
+      # ----------------------------------------------------------
       - name: Verify signed container image
-        env:
-          IMAGE: ${{ steps.config.outputs.image }}
-        run: |
-          echo "Verifying Cosign signature for ${IMAGE}"
-          cosign verify --key ./cosign.pub "${IMAGE}"
-          echo "Cosign verification: PASSED"
-
-      - name: Generate Terraform variables
         shell: bash
         env:
-          SERVICE_NAME: ${{ steps.config.outputs.service_name }}
+          IMAGE: ${{ steps.config.outputs.docker_image }}
+        run: |
+          echo "Resolving immutable image digest for ${IMAGE}"
+
+          REGISTRY="${IMAGE%%/*}"
+          IMAGE_PATH="${IMAGE#*/}"
+
+          REPOSITORY="${IMAGE_PATH%%:*}"
+          TAG="${IMAGE_PATH##*:}"
+
+          echo "Registry: ${REGISTRY}"
+          echo "Repository: ${REPOSITORY}"
+          echo "Tag: ${TAG}"
+
+          IMAGE_DIGEST=$(aws ecr describe-images \
+            --region "${AWS_REGION}" \
+            --repository-name "${REPOSITORY}" \
+            --image-ids imageTag="${TAG}" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+
+          if [ -z "${IMAGE_DIGEST}" ] || [ "${IMAGE_DIGEST}" = "None" ]; then
+            echo "ERROR: Could not resolve image digest."
+            exit 1
+          fi
+
+          IMAGE_WITH_DIGEST="${REGISTRY}/${REPOSITORY}@${IMAGE_DIGEST}"
+
+          echo "Resolved immutable image:"
+          echo "${IMAGE_WITH_DIGEST}"
+
+          echo "Verifying Cosign signature..."
+
+          cosign verify \
+            --key ./cosign.pub \
+            "${IMAGE_WITH_DIGEST}"
+
+          echo "============================================"
+          echo "Cosign signature verification PASSED"
+          echo "============================================"
+
+          echo "image_digest=${IMAGE_DIGEST}" >> "${GITHUB_OUTPUT}"
+
+      # ----------------------------------------------------------
+      # Select template
+      # ----------------------------------------------------------
+      - name: Select Terraform template
+        id: template
+        shell: bash
+        env:
           TEMPLATE_TYPE: ${{ steps.config.outputs.template_type }}
-          TEAM_NAME: ${{ steps.config.outputs.team_name }}
-          IMAGE: ${{ steps.config.outputs.image }}
-          ENVIRONMENT: ${{ steps.config.outputs.environment }}
-          VPC_ID: ${{ needs.discover.outputs.vpc_id }}
-          PRIVATE_SUBNETS: ${{ needs.discover.outputs.private_subnets }}
-          PUBLIC_SUBNETS: ${{ needs.discover.outputs.public_subnets }}
-          ALERT_EMAIL: ${{ secrets.IDP_ALERT_EMAIL }}
         run: |
           case "${TEMPLATE_TYPE}" in
-
             web-service)
-              TEMPLATE_DIR="templates/web-service"
-
-              cat > "${TEMPLATE_DIR}/terraform.tfvars" <<EOF
-          service_name = "${SERVICE_NAME}"
-          team_name = "${TEAM_NAME}"
-          docker_image = "${IMAGE}"
-          environment = "${ENVIRONMENT}"
-          alert_email = "${ALERT_EMAIL}"
-          aws_region = "${AWS_REGION}"
-          vpc_id = "${VPC_ID}"
-          private_subnet_ids = ${PRIVATE_SUBNETS}
-          public_subnet_ids = ${PUBLIC_SUBNETS}
-          EOF
+              TEMPLATE_PATH="templates/web-service"
               ;;
 
             background-worker)
-              TEMPLATE_DIR="templates/background-worker"
-
-              cat > "${TEMPLATE_DIR}/terraform.tfvars" <<EOF
-          service_name = "${SERVICE_NAME}"
-          team_name = "${TEAM_NAME}"
-          docker_image = "${IMAGE}"
-          environment = "${ENVIRONMENT}"
-          alert_email = "${ALERT_EMAIL}"
-          aws_region = "${AWS_REGION}"
-          vpc_id = "${VPC_ID}"
-          private_subnet_ids = ${PRIVATE_SUBNETS}
-          queue_name = "${SERVICE_NAME}-${ENVIRONMENT}-jobs"
-          EOF
+              TEMPLATE_PATH="templates/background-worker"
               ;;
 
             scheduled-job)
-              TEMPLATE_DIR="templates/scheduled-job"
-
-              cat > "${TEMPLATE_DIR}/terraform.tfvars" <<EOF
-          job_name = "${SERVICE_NAME}"
-          team_name = "${TEAM_NAME}"
-          docker_image = "${IMAGE}"
-          environment = "${ENVIRONMENT}"
-          aws_region = "${AWS_REGION}"
-          vpc_id = "${VPC_ID}"
-          private_subnet_ids = ${PRIVATE_SUBNETS}
-          schedule_expression = "rate(1 day)"
-          EOF
+              TEMPLATE_PATH="templates/scheduled-job"
               ;;
 
             *)
-              echo "Unsupported template type: ${TEMPLATE_TYPE}"
+              echo "ERROR: Unsupported template type: ${TEMPLATE_TYPE}"
               exit 1
               ;;
           esac
 
-          echo "TEMPLATE_DIR=${TEMPLATE_DIR}" >> "$GITHUB_ENV"
+          echo "template_path=${TEMPLATE_PATH}" >> "${GITHUB_OUTPUT}"
 
+          echo "Selected template:"
+          echo "${TEMPLATE_PATH}"
+
+      # ----------------------------------------------------------
+      # Generate Terraform variables
+      # ----------------------------------------------------------
+      - name: Generate Terraform variables
+        shell: bash
+        env:
+          SERVICE_NAME: ${{ steps.config.outputs.service_name }}
+          TEAM_NAME: ${{ steps.config.outputs.team_name }}
+          DOCKER_IMAGE: ${{ steps.config.outputs.docker_image }}
+          ENVIRONMENT: ${{ steps.config.outputs.environment }}
+          ALERT_EMAIL: ${{ secrets.IDP_ALERT_EMAIL }}
+          VPC_ID: ${{ needs.discover.outputs.vpc_id }}
+          VPC_CIDR: ${{ needs.discover.outputs.vpc_cidr }}
+          PRIVATE_SUBNET_IDS: ${{ needs.discover.outputs.private_subnet_ids }}
+          PUBLIC_SUBNET_IDS: ${{ needs.discover.outputs.public_subnet_ids }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+
+          service_name = os.environ["SERVICE_NAME"]
+          template_type = os.environ["TEMPLATE_TYPE"] if "TEMPLATE_TYPE" in os.environ else ""
+
+          data = {
+              "service_name": service_name,
+              "team_name": os.environ["TEAM_NAME"],
+              "docker_image": os.environ["DOCKER_IMAGE"],
+              "environment": os.environ["ENVIRONMENT"],
+              "alert_email": os.environ.get("ALERT_EMAIL", ""),
+              "vpc_id": os.environ["VPC_ID"],
+              "vpc_cidr": os.environ["VPC_CIDR"],
+              "private_subnet_ids": json.loads(
+                  os.environ["PRIVATE_SUBNET_IDS"]
+              ),
+              "public_subnet_ids": json.loads(
+                  os.environ["PUBLIC_SUBNET_IDS"]
+              )
+          }
+
+          with open("generated.tfvars.json", "w") as f:
+              json.dump(data, f, indent=2)
+
+          print("Generated Terraform variables:")
+          print(json.dumps(data, indent=2))
+          PY
+
+      # ----------------------------------------------------------
+      # Terraform initialization
+      # ----------------------------------------------------------
       - name: Terraform init
-        working-directory: ${{ env.TEMPLATE_DIR }}
+        working-directory: ${{ steps.template.outputs.template_path }}
         env:
           SERVICE_NAME: ${{ steps.config.outputs.service_name }}
           ENVIRONMENT: ${{ steps.config.outputs.environment }}
         run: |
-          terraform init -reconfigure \
-            -backend-config="bucket=${TF_STATE_BUCKET}" \
+          terraform init \
+            -backend-config="bucket=${STATE_BUCKET}" \
             -backend-config="key=idp-onboarding/${ENVIRONMENT}/${SERVICE_NAME}/terraform.tfstate" \
             -backend-config="region=${AWS_REGION}" \
             -backend-config="use_lockfile=true"
 
+      # ----------------------------------------------------------
+      # Terraform validate
+      # ----------------------------------------------------------
       - name: Terraform validate
-        working-directory: ${{ env.TEMPLATE_DIR }}
+        working-directory: ${{ steps.template.outputs.template_path }}
         run: terraform validate
 
+      # ----------------------------------------------------------
+      # Copy generated variables
+      # ----------------------------------------------------------
+      - name: Prepare Terraform variables
+        shell: bash
+        run: |
+          cp generated.tfvars.json \
+            "${{ steps.template.outputs.template_path }}/generated.tfvars.json"
+
+      # ----------------------------------------------------------
+      # Terraform plan
+      # ----------------------------------------------------------
       - name: Terraform plan
-        working-directory: ${{ env.TEMPLATE_DIR }}
-        run: terraform plan -out=tfplan
+        working-directory: ${{ steps.template.outputs.template_path }}
+        env:
+          ACTION: ${{ inputs.action || 'apply' }}
+        run: |
+          if [ "${ACTION}" = "destroy" ]; then
+            terraform plan \
+              -destroy \
+              -var-file="generated.tfvars.json" \
+              -out=tfplan
+          else
+            terraform plan \
+              -var-file="generated.tfvars.json" \
+              -out=tfplan
+          fi
 
+      # ----------------------------------------------------------
+      # Terraform apply / destroy
+      # ----------------------------------------------------------
       - name: Terraform apply
-        working-directory: ${{ env.TEMPLATE_DIR }}
-        run: terraform apply -auto-approve tfplan
+        if: ${{ (inputs.action || 'apply') == 'apply' }}
+        working-directory: ${{ steps.template.outputs.template_path }}
+        run: |
+          terraform apply \
+            -auto-approve \
+            tfplan
 
-      - name: Generate catalogue registration
+      - name: Terraform destroy
+        if: ${{ inputs.action == 'destroy' }}
+        working-directory: ${{ steps.template.outputs.template_path }}
+        run: |
+          terraform apply \
+            -destroy \
+            -auto-approve \
+            tfplan
+
+      # ----------------------------------------------------------
+      # Generate catalogue entry
+      # ----------------------------------------------------------
+      - name: Generate catalogue entry
+        if: ${{ (inputs.action || 'apply') == 'apply' }}
+        shell: bash
         env:
           SERVICE_NAME: ${{ steps.config.outputs.service_name }}
-          TEMPLATE_TYPE: ${{ steps.config.outputs.template_type }}
           TEAM_NAME: ${{ steps.config.outputs.team_name }}
+          TEMPLATE_TYPE: ${{ steps.config.outputs.template_type }}
           ENVIRONMENT: ${{ steps.config.outputs.environment }}
         run: |
           mkdir -p "catalogue/backstage/${SERVICE_NAME}"
+          mkdir -p "docs/${SERVICE_NAME}"
 
           cat > "catalogue/backstage/${SERVICE_NAME}/catalog-info.yaml" <<EOF
           apiVersion: backstage.io/v1alpha1
           kind: Component
           metadata:
             name: ${SERVICE_NAME}
-            description: ${SERVICE_NAME} provisioned through the Internal Developer Platform
+            description: ${SERVICE_NAME} managed by the Internal Developer Platform
             tags:
               - aws
               - ${TEMPLATE_TYPE}
               - ${ENVIRONMENT}
             annotations:
-              idp.io/deployment-status: active
-              idp.io/template: ${TEMPLATE_TYPE}
+              idp/status: active
+              idp/environment: ${ENVIRONMENT}
+              backstage.io/techdocs-ref: dir:../../../docs/${SERVICE_NAME}
             links:
-              - url: https://example.com/runbooks/${SERVICE_NAME}
-                title: Runbook
-                icon: docs
               - url: https://grafana.example.com/d/${SERVICE_NAME}
                 title: Grafana Dashboard
                 icon: dashboard
+              - url: https://github.com/saakibsheikh1/internal-developer-platform
+                title: Repository
+                icon: github
           spec:
             type: service
             lifecycle: production
             owner: ${TEAM_NAME}
-            system: internal-developer-platform
           EOF
 
+          cat > "docs/${SERVICE_NAME}/index.md" <<EOF
+          # ${SERVICE_NAME}
+
+          ## Service Overview
+
+          - **Service:** ${SERVICE_NAME}
+          - **Owner:** ${TEAM_NAME}
+          - **Environment:** ${ENVIRONMENT}
+          - **Template:** ${TEMPLATE_TYPE}
+
+          ## Platform
+
+          This service was provisioned through the Internal Developer Platform.
+
+          ## Operations
+
+          Terraform state is stored in the dedicated onboarding state prefix:
+
+          \`idp-onboarding/${ENVIRONMENT}/${SERVICE_NAME}/terraform.tfstate\`
+
+          ## Monitoring
+
+          Grafana dashboard:
+
+          https://grafana.example.com/d/${SERVICE_NAME}
+
+          ## Runbook
+
+          - Check ECS service health.
+          - Check CloudWatch alarms.
+          - Check application logs.
+          - Check ALB target health where applicable.
+          - Verify container image and deployment status.
+          EOF
+
+      # ----------------------------------------------------------
+      # Generate Grafana dashboard definition
+      # ----------------------------------------------------------
       - name: Generate Grafana dashboard definition
+        if: ${{ (inputs.action || 'apply') == 'apply' }}
+        shell: bash
         env:
           SERVICE_NAME: ${{ steps.config.outputs.service_name }}
+          ENVIRONMENT: ${{ steps.config.outputs.environment }}
+          TEAM_NAME: ${{ steps.config.outputs.team_name }}
         run: |
-          mkdir -p "grafana/dashboards"
+          mkdir -p "monitoring/grafana"
 
-          cat > "grafana/dashboards/${SERVICE_NAME}.json" <<EOF
+          cat > "monitoring/grafana/${SERVICE_NAME}.json" <<EOF
           {
-            "title": "${SERVICE_NAME}",
-            "uid": "${SERVICE_NAME}",
-            "tags": ["idp", "service", "aws"],
-            "schemaVersion": 39,
-            "version": 1,
-            "panels": [
-              {
-                "type": "timeseries",
-                "title": "CPU Utilization",
-                "targets": []
-              },
-              {
-                "type": "timeseries",
-                "title": "Memory Utilization",
-                "targets": []
-              },
-              {
-                "type": "timeseries",
-                "title": "Service Health",
-                "targets": []
-              }
-            ]
+            "dashboard": {
+              "title": "${SERVICE_NAME} - Platform Dashboard",
+              "uid": "${SERVICE_NAME}",
+              "tags": [
+                "idp",
+                "${ENVIRONMENT}",
+                "${TEAM_NAME}"
+              ],
+              "timezone": "browser",
+              "panels": [
+                {
+                  "type": "timeseries",
+                  "title": "Request Rate",
+                  "targets": []
+                },
+                {
+                  "type": "timeseries",
+                  "title": "Error Rate",
+                  "targets": []
+                },
+                {
+                  "type": "timeseries",
+                  "title": "Latency",
+                  "targets": []
+                },
+                {
+                  "type": "timeseries",
+                  "title": "Resource Utilization",
+                  "targets": []
+                }
+              ]
+            }
           }
           EOF
 
+      # ----------------------------------------------------------
+      # Publish SNS onboarding summary
+      # ----------------------------------------------------------
+      - name: Publish onboarding summary
+        if: ${{ always() }}
+        shell: bash
+        env:
+          SERVICE_NAME: ${{ steps.config.outputs.service_name }}
+          TEAM_NAME: ${{ steps.config.outputs.team_name }}
+          TEMPLATE_TYPE: ${{ steps.config.outputs.template_type }}
+          ENVIRONMENT: ${{ steps.config.outputs.environment }}
+          ACTION: ${{ inputs.action || 'apply' }}
+        run: |
+          TOPIC_NAME="idp-onboarding-summary"
+
+          TOPIC_ARN=$(aws sns create-topic \
+            --name "${TOPIC_NAME}" \
+            --region "${AWS_REGION}" \
+            --query TopicArn \
+            --output text)
+
+          MESSAGE="IDP Platform Onboarding Summary
+
+          Service: ${SERVICE_NAME}
+          Team: ${TEAM_NAME}
+          Template: ${TEMPLATE_TYPE}
+          Environment: ${ENVIRONMENT}
+          Action: ${ACTION}
+          Repository: saakibsheikh1/internal-developer-platform
+          Workflow: ${GITHUB_RUN_ID}
+
+          Terraform onboarding workflow completed."
+
+          aws sns publish \
+            --topic-arn "${TOPIC_ARN}" \
+            --message "${MESSAGE}" \
+            --region "${AWS_REGION}"
+
+      # ----------------------------------------------------------
+      # Git commit catalogue and dashboard
+      # ----------------------------------------------------------
       - name: Commit catalogue and dashboard
+        if: ${{ (inputs.action || 'apply') == 'apply' }}
+        shell: bash
         env:
           SERVICE_NAME: ${{ steps.config.outputs.service_name }}
         run: |
-          git config user.name "IDP Automation"
-          git config user.email "idp-automation@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add "catalogue/backstage/${SERVICE_NAME}" "grafana/dashboards/${SERVICE_NAME}.json"
+          git add \
+            "catalogue/backstage/${SERVICE_NAME}" \
+            "docs/${SERVICE_NAME}" \
+            "monitoring/grafana/${SERVICE_NAME}.json"
 
           if git diff --cached --quiet; then
             echo "No catalogue/dashboard changes to commit."
           else
-            git commit -m "chore(idp): onboard ${SERVICE_NAME}"
+            git commit \
+              -m "chore(idp): onboard ${SERVICE_NAME}"
+
             git push
           fi
 
-      - name: Publish SNS onboarding summary
+      # ----------------------------------------------------------
+      # GitHub job summary
+      # ----------------------------------------------------------
+      - name: Publish GitHub Actions summary
+        if: always()
+        shell: bash
         env:
           SERVICE_NAME: ${{ steps.config.outputs.service_name }}
+          TEAM_NAME: ${{ steps.config.outputs.team_name }}
           TEMPLATE_TYPE: ${{ steps.config.outputs.template_type }}
           ENVIRONMENT: ${{ steps.config.outputs.environment }}
-        run: |
-          TOPIC_ARN=$(aws sns create-topic \
-            --name internal-developer-platform-onboarding-summaries \
-            --query TopicArn \
-            --output text)
-
-          MESSAGE="IDP onboarding completed successfully. Service=${SERVICE_NAME}, Template=${TEMPLATE_TYPE}, Environment=${ENVIRONMENT}, Status=ACTIVE."
-
-          aws sns publish \
-            --topic-arn "${TOPIC_ARN}" \
-            --subject "IDP Onboarding: ${SERVICE_NAME}" \
-            --message "${MESSAGE}"
-
-          echo "${MESSAGE}"
-
-      - name: Job summary
-        env:
-          SERVICE_NAME: ${{ steps.config.outputs.service_name }}
-          TEMPLATE_TYPE: ${{ steps.config.outputs.template_type }}
-          ENVIRONMENT: ${{ steps.config.outputs.environment }}
+          ACTION: ${{ inputs.action || 'apply' }}
         run: |
           {
-            echo "## IDP Onboarding Complete"
-            echo ""
+            echo "# IDP Platform Onboarding"
+            echo
             echo "| Field | Value |"
             echo "|---|---|"
             echo "| Service | ${SERVICE_NAME} |"
+            echo "| Team | ${TEAM_NAME} |"
             echo "| Template | ${TEMPLATE_TYPE} |"
             echo "| Environment | ${ENVIRONMENT} |"
-            echo "| Status | ACTIVE |"
+            echo "| Action | ${ACTION} |"
+            echo "| AWS Region | ${AWS_REGION} |"
             echo "| Terraform State | idp-onboarding/${ENVIRONMENT}/${SERVICE_NAME}/terraform.tfstate |"
-            echo "| Cosign | VERIFIED |"
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo "| Grafana | https://grafana.example.com/d/${SERVICE_NAME} |"
+            echo
+            echo "## Security"
+            echo
+            echo "- ECR authentication: enabled"
+            echo "- Cosign image verification: enabled"
+            echo "- Immutable image digest verification: enabled"
+            echo "- GitHub OIDC authentication: enabled"
+            echo
+            echo "## Platform"
+            echo
+            echo "- Self-service configuration: platform.yaml"
+            echo "- Terraform template selection: enabled"
+            echo "- Catalogue-as-code: enabled"
+            echo "- TechDocs: enabled"
+            echo "- Grafana dashboard definition: generated"
+            echo "- SNS summary: enabled"
+          } >> "${GITHUB_STEP_SUMMARY}"
