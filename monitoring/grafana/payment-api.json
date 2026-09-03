@@ -1,0 +1,37 @@
+{
+  "dashboard": {
+    "title": "payment-api - Platform Dashboard",
+    "uid": "payment-api",
+
+    "tags": [
+      "idp",
+      "dev",
+      "payments"
+    ],
+
+    "timezone": "browser",
+
+    "panels": [
+      {
+        "type": "timeseries",
+        "title": "Request Rate",
+        "targets": []
+      },
+      {
+        "type": "timeseries",
+        "title": "Error Rate",
+        "targets": []
+      },
+      {
+        "type": "timeseries",
+        "title": "Latency",
+        "targets": []
+      },
+      {
+        "type": "timeseries",
+        "title": "Resource Utilization",
+        "targets": []
+      }
+    ]
+  }
+}

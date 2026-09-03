@@ -3,27 +3,29 @@ kind: Component
 
 metadata:
   name: payment-api
-  description: Payment API web service
+
+  description: payment-api managed by the Internal Developer Platform
+
   tags:
     - aws
-    - ecs
-    - fargate
     - web-service
+    - dev
+
   annotations:
-    idp.io/deployment-status: active
-    idp.io/techdocs: docs/payment-api/index.md
+    idp/status: active
+    idp/environment: dev
+    backstage.io/techdocs-ref: dir:../../../docs/payment-api
+
   links:
-    - url: https://example.com/runbooks/payment-api
-      title: Runbook
-      icon: docs
     - url: https://grafana.example.com/d/payment-api
       title: Grafana Dashboard
       icon: dashboard
+
+    - url: https://github.com/saakibsheikh1/internal-developer-platform
+      title: Repository
+      icon: github
 
 spec:
   type: service
   lifecycle: production
   owner: payments
-  system: internal-developer-platform
-  dependsOn:
-    - resource:aws/ecs
