@@ -5,6 +5,7 @@ on:
     paths:
       - "onboarding/examples/platform.yaml"
       - "onboarding/schemas/platform.schema.json"
+      - "governance/template-versions.yaml"
       - "templates/**"
       - "modules/**"
       - ".github/workflows/platform-onboarding.yml"
@@ -29,6 +30,7 @@ on:
 permissions:
   id-token: write
   contents: write
+  actions: read
 
 concurrency:
   group: idp-platform-onboarding
@@ -38,12 +40,14 @@ env:
   AWS_REGION: ap-south-1
   AWS_ROLE_ARN: arn:aws:iam::495278513365:role/IDP-GitHubActions-Onboarding
   STATE_BUCKET: sakib-terraform-state-495278513365
+  PLATFORM_ALERT_TOPIC_ARN: arn:aws:sns:ap-south-1:495278513365:idp-platform-alerts
 
 jobs:
 
   # ============================================================
   # STAGE 3 - VALIDATE PLATFORM CONFIGURATION
   # ============================================================
+
   validate:
     name: Validate platform configuration
     runs-on: ubuntu-latest
@@ -94,6 +98,7 @@ jobs:
           required = [
               "service_name",
               "template_type",
+              "template_version",
               "team_name",
               "docker_image",
               "environment"
@@ -108,10 +113,104 @@ jobs:
           print(json.dumps(config, indent=2))
           PY
 
+      - name: Validate approved golden-path template version
+        shell: bash
+        env:
+          CONFIG_FILE: ${{ inputs.config_file || 'onboarding/examples/platform.yaml' }}
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          import yaml
+
+          config_file = os.environ["CONFIG_FILE"]
+
+          with open(config_file, "r", encoding="utf-8-sig") as f:
+              config = yaml.safe_load(f)
+
+          with open(
+              "governance/template-versions.yaml",
+              "r",
+              encoding="utf-8-sig"
+          ) as f:
+              governance = yaml.safe_load(f)
+
+          template_type = config["template_type"]
+          requested_version = str(config["template_version"])
+
+          templates = governance.get("templates", {})
+
+          if template_type not in templates:
+              print(
+                  f"ERROR: Template type '{template_type}' "
+                  "is not registered in governance/template-versions.yaml."
+              )
+              sys.exit(1)
+
+          approved = templates[template_type]
+
+          approved_version = str(
+              approved.get("version", "")
+          )
+
+          status = approved.get(
+              "status",
+              ""
+          )
+
+          expected_path = (
+              f"templates/{template_type}"
+          )
+
+          configured_path = approved.get(
+              "path",
+              ""
+          )
+
+          print(
+              f"Template type: {template_type}"
+          )
+          print(
+              f"Requested version: {requested_version}"
+          )
+          print(
+              f"Approved version: {approved_version}"
+          )
+          print(
+              f"Governance status: {status}"
+          )
+          print(
+              f"Governance path: {configured_path}"
+          )
+
+          if status != "approved":
+              print(
+                  "ERROR: Requested template is not approved."
+              )
+              sys.exit(1)
+
+          if requested_version != approved_version:
+              print(
+                  "ERROR: Requested template version does "
+                  "not match the approved version."
+              )
+              sys.exit(1)
+
+          if configured_path != expected_path:
+              print(
+                  "ERROR: Governance template path does "
+                  "not match the expected golden-path path."
+              )
+              sys.exit(1)
+
+          print(
+              "Approved golden-path template version verified."
+          )
 
   # ============================================================
   # STAGE 3 - PLATFORM NETWORK BOOTSTRAP
   # ============================================================
+
   discover:
     name: Bootstrap platform network
     needs: validate
@@ -186,10 +285,10 @@ jobs:
           echo "Private subnets: ${PRIVATE_SUBNET_IDS}"
           echo "Public subnets: ${PUBLIC_SUBNET_IDS}"
 
-
   # ============================================================
   # STAGE 3 - AUTOMATED SERVICE ONBOARDING
   # ============================================================
+
   onboard:
     name: Onboard service
     needs:
@@ -200,14 +299,10 @@ jobs:
 
     steps:
 
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       # ----------------------------------------------------------
       # AWS OIDC
       # ----------------------------------------------------------
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v5
         with:
@@ -216,8 +311,18 @@ jobs:
           role-session-name: IDPServiceOnboarding
 
       # ----------------------------------------------------------
+      # Checkout
+      # ----------------------------------------------------------
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ----------------------------------------------------------
       # Terraform
       # ----------------------------------------------------------
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -226,6 +331,7 @@ jobs:
       # ----------------------------------------------------------
       # Python
       # ----------------------------------------------------------
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -239,6 +345,7 @@ jobs:
       # ----------------------------------------------------------
       # Read platform.yaml
       # ----------------------------------------------------------
+
       - name: Read platform configuration
         id: config
         shell: bash
@@ -257,6 +364,7 @@ jobs:
           required = [
               "service_name",
               "template_type",
+              "template_version",
               "team_name",
               "docker_image",
               "environment"
@@ -268,7 +376,11 @@ jobs:
                       f"Missing required field: {field}"
                   )
 
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+          with open(
+              os.environ["GITHUB_OUTPUT"],
+              "a"
+          ) as output:
+
               for key in required:
                   output.write(
                       f"{key}={config[key]}\n"
@@ -277,12 +389,102 @@ jobs:
           print("Configuration loaded:")
 
           for key in required:
-              print(f"{key}: {config[key]}")
+              print(
+                  f"{key}: {config[key]}"
+              )
+          PY
+
+      # ----------------------------------------------------------
+      # Validate governance again in onboarding job
+      # ----------------------------------------------------------
+
+      - name: Verify approved template governance
+        shell: bash
+        env:
+          TEMPLATE_TYPE: ${{ steps.config.outputs.template_type }}
+          TEMPLATE_VERSION: ${{ steps.config.outputs.template_version }}
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          import yaml
+
+          template_type = os.environ["TEMPLATE_TYPE"]
+          requested_version = os.environ["TEMPLATE_VERSION"]
+
+          with open(
+              "governance/template-versions.yaml",
+              "r",
+              encoding="utf-8-sig"
+          ) as f:
+              governance = yaml.safe_load(f)
+
+          templates = governance.get(
+              "templates",
+              {}
+          )
+
+          if template_type not in templates:
+              print(
+                  f"ERROR: Unsupported template: {template_type}"
+              )
+              sys.exit(1)
+
+          approved = templates[
+              template_type
+          ]
+
+          approved_version = str(
+              approved.get("version", "")
+          )
+
+          status = approved.get(
+              "status",
+              ""
+          )
+
+          expected_path = (
+              f"templates/{template_type}"
+          )
+
+          configured_path = approved.get(
+              "path",
+              ""
+          )
+
+          if status != "approved":
+              print(
+                  "ERROR: Template is not approved."
+              )
+              sys.exit(1)
+
+          if requested_version != approved_version:
+              print(
+                  "ERROR: Template version mismatch."
+              )
+              sys.exit(1)
+
+          if configured_path != expected_path:
+              print(
+                  "ERROR: Template path mismatch."
+              )
+              sys.exit(1)
+
+          print(
+              "Golden-path governance verification PASSED."
+          )
+          print(
+              f"Template: {template_type}"
+          )
+          print(
+              f"Version: {requested_version}"
+          )
           PY
 
       # ----------------------------------------------------------
       # Install Cosign v3.1.3
       # ----------------------------------------------------------
+
       - name: Install Cosign
         uses: sigstore/cosign-installer@v4.1.0
         with:
@@ -291,6 +493,7 @@ jobs:
       # ----------------------------------------------------------
       # Verify installed Cosign version
       # ----------------------------------------------------------
+
       - name: Verify Cosign installation
         shell: bash
         run: |
@@ -300,6 +503,7 @@ jobs:
       # ----------------------------------------------------------
       # ECR authentication
       # ----------------------------------------------------------
+
       - name: Login to Amazon ECR
         shell: bash
         run: |
@@ -313,6 +517,7 @@ jobs:
       # ----------------------------------------------------------
       # Verify Cosign signature
       # ----------------------------------------------------------
+
       - name: Verify signed container image
         shell: bash
         env:
@@ -405,6 +610,7 @@ jobs:
       # ----------------------------------------------------------
       # Select Terraform template
       # ----------------------------------------------------------
+
       - name: Select Terraform template
         id: template
         shell: bash
@@ -440,6 +646,7 @@ jobs:
       # ----------------------------------------------------------
       # Generate Terraform variables
       # ----------------------------------------------------------
+
       - name: Generate Terraform variables
         shell: bash
         env:
@@ -447,9 +654,9 @@ jobs:
           TEAM_NAME: ${{ steps.config.outputs.team_name }}
           DOCKER_IMAGE: ${{ steps.config.outputs.docker_image }}
           ENVIRONMENT: ${{ steps.config.outputs.environment }}
+          TEMPLATE_VERSION: ${{ steps.config.outputs.template_version }}
           ALERT_EMAIL: ${{ secrets.IDP_ALERT_EMAIL }}
           VPC_ID: ${{ needs.discover.outputs.vpc_id }}
-          VPC_CIDR: ${{ needs.discover.outputs.vpc_cidr }}
           PRIVATE_SUBNET_IDS: ${{ needs.discover.outputs.private_subnet_ids }}
           PUBLIC_SUBNET_IDS: ${{ needs.discover.outputs.public_subnet_ids }}
         run: |
@@ -462,9 +669,9 @@ jobs:
               "team_name": os.environ["TEAM_NAME"],
               "docker_image": os.environ["DOCKER_IMAGE"],
               "environment": os.environ["ENVIRONMENT"],
+              "template_version": os.environ["TEMPLATE_VERSION"],
               "alert_email": os.environ.get("ALERT_EMAIL", ""),
               "vpc_id": os.environ["VPC_ID"],
-              "vpc_cidr": os.environ["VPC_CIDR"],
               "private_subnet_ids": json.loads(
                   os.environ["PRIVATE_SUBNET_IDS"]
               ),
@@ -473,16 +680,32 @@ jobs:
               )
           }
 
-          with open("generated.tfvars.json", "w") as f:
-              json.dump(data, f, indent=2)
+          with open(
+              "generated.tfvars.json",
+              "w"
+          ) as f:
+              json.dump(
+                  data,
+                  f,
+                  indent=2
+              )
 
-          print("Generated Terraform variables:")
-          print(json.dumps(data, indent=2))
+          print(
+              "Generated Terraform variables:"
+          )
+
+          print(
+              json.dumps(
+                  data,
+                  indent=2
+              )
+          )
           PY
 
       # ----------------------------------------------------------
       # Terraform initialization
       # ----------------------------------------------------------
+
       - name: Terraform init
         working-directory: ${{ steps.template.outputs.template_path }}
         env:
@@ -498,6 +721,7 @@ jobs:
       # ----------------------------------------------------------
       # Terraform validate
       # ----------------------------------------------------------
+
       - name: Terraform validate
         working-directory: ${{ steps.template.outputs.template_path }}
         run: |
@@ -506,6 +730,7 @@ jobs:
       # ----------------------------------------------------------
       # Copy generated variables
       # ----------------------------------------------------------
+
       - name: Prepare Terraform variables
         shell: bash
         run: |
@@ -515,6 +740,7 @@ jobs:
       # ----------------------------------------------------------
       # Terraform plan
       # ----------------------------------------------------------
+
       - name: Terraform plan
         working-directory: ${{ steps.template.outputs.template_path }}
         env:
@@ -539,6 +765,7 @@ jobs:
       # ----------------------------------------------------------
       # Terraform apply
       # ----------------------------------------------------------
+
       - name: Terraform apply
         if: ${{ (inputs.action || 'apply') == 'apply' }}
         working-directory: ${{ steps.template.outputs.template_path }}
@@ -550,6 +777,7 @@ jobs:
       # ----------------------------------------------------------
       # Terraform destroy / offboarding
       # ----------------------------------------------------------
+
       - name: Terraform destroy
         if: ${{ inputs.action == 'destroy' }}
         working-directory: ${{ steps.template.outputs.template_path }}
@@ -562,6 +790,7 @@ jobs:
       # ----------------------------------------------------------
       # Generate Backstage catalogue entry
       # ----------------------------------------------------------
+
       - name: Generate catalogue entry
         if: ${{ (inputs.action || 'apply') == 'apply' }}
         shell: bash
@@ -569,12 +798,16 @@ jobs:
           SERVICE_NAME: ${{ steps.config.outputs.service_name }}
           TEAM_NAME: ${{ steps.config.outputs.team_name }}
           TEMPLATE_TYPE: ${{ steps.config.outputs.template_type }}
+          TEMPLATE_VERSION: ${{ steps.config.outputs.template_version }}
           ENVIRONMENT: ${{ steps.config.outputs.environment }}
         run: |
 
-          mkdir -p "catalogue/backstage/${SERVICE_NAME}"
+          mkdir -p \
+            "catalogue/backstage/${SERVICE_NAME}"
 
-          cat > "catalogue/backstage/${SERVICE_NAME}/catalog-info.yaml" <<EOF
+          cat > \
+            "catalogue/backstage/${SERVICE_NAME}/catalog-info.yaml" \
+            <<EOF
           apiVersion: backstage.io/v1alpha1
           kind: Component
 
@@ -591,6 +824,7 @@ jobs:
             annotations:
               idp/status: active
               idp/environment: ${ENVIRONMENT}
+              idp/template-version: ${TEMPLATE_VERSION}
               backstage.io/techdocs-ref: dir:../../../docs/${SERVICE_NAME}
 
             links:
@@ -611,6 +845,7 @@ jobs:
       # ----------------------------------------------------------
       # Generate TechDocs
       # ----------------------------------------------------------
+
       - name: Generate TechDocs
         if: ${{ (inputs.action || 'apply') == 'apply' }}
         shell: bash
@@ -618,12 +853,16 @@ jobs:
           SERVICE_NAME: ${{ steps.config.outputs.service_name }}
           TEAM_NAME: ${{ steps.config.outputs.team_name }}
           TEMPLATE_TYPE: ${{ steps.config.outputs.template_type }}
+          TEMPLATE_VERSION: ${{ steps.config.outputs.template_version }}
           ENVIRONMENT: ${{ steps.config.outputs.environment }}
         run: |
 
-          mkdir -p "docs/${SERVICE_NAME}"
+          mkdir -p \
+            "docs/${SERVICE_NAME}"
 
-          cat > "docs/${SERVICE_NAME}/index.md" <<EOF
+          cat > \
+            "docs/${SERVICE_NAME}/index.md" \
+            <<EOF
           # ${SERVICE_NAME}
 
           ## Service Overview
@@ -632,10 +871,16 @@ jobs:
           - **Owner:** ${TEAM_NAME}
           - **Environment:** ${ENVIRONMENT}
           - **Template:** ${TEMPLATE_TYPE}
+          - **Template Version:** ${TEMPLATE_VERSION}
 
           ## Platform
 
           This service was provisioned through the Internal Developer Platform.
+
+          ## Golden Path Governance
+
+          The service uses the approved golden-path template version
+          ${TEMPLATE_VERSION}.
 
           ## Infrastructure
 
@@ -669,18 +914,22 @@ jobs:
       # ----------------------------------------------------------
       # Generate Grafana dashboard definition
       # ----------------------------------------------------------
+
       - name: Generate Grafana dashboard definition
         if: ${{ (inputs.action || 'apply') == 'apply' }}
         shell: bash
         env:
           SERVICE_NAME: ${{ steps.config.outputs.service_name }}
+          TEMPLATE_VERSION: ${{ steps.config.outputs.template_version }}
           ENVIRONMENT: ${{ steps.config.outputs.environment }}
           TEAM_NAME: ${{ steps.config.outputs.team_name }}
         run: |
 
           mkdir -p monitoring/grafana
 
-          cat > "monitoring/grafana/${SERVICE_NAME}.json" <<EOF
+          cat > \
+            "monitoring/grafana/${SERVICE_NAME}.json" \
+            <<EOF
           {
             "dashboard": {
               "title": "${SERVICE_NAME} - Platform Dashboard",
@@ -689,7 +938,8 @@ jobs:
               "tags": [
                 "idp",
                 "${ENVIRONMENT}",
-                "${TEAM_NAME}"
+                "${TEAM_NAME}",
+                "template-v${TEMPLATE_VERSION}"
               ],
 
               "timezone": "browser",
@@ -721,8 +971,9 @@ jobs:
           EOF
 
       # ----------------------------------------------------------
-      # SNS summary
+      # SNS onboarding summary
       # ----------------------------------------------------------
+
       - name: Publish onboarding summary
         if: ${{ always() }}
         shell: bash
@@ -730,6 +981,7 @@ jobs:
           SERVICE_NAME: ${{ steps.config.outputs.service_name }}
           TEAM_NAME: ${{ steps.config.outputs.team_name }}
           TEMPLATE_TYPE: ${{ steps.config.outputs.template_type }}
+          TEMPLATE_VERSION: ${{ steps.config.outputs.template_version }}
           ENVIRONMENT: ${{ steps.config.outputs.environment }}
           ACTION: ${{ inputs.action || 'apply' }}
         run: |
@@ -747,6 +999,7 @@ jobs:
           Service: ${SERVICE_NAME}
           Team: ${TEAM_NAME}
           Template: ${TEMPLATE_TYPE}
+          Template Version: ${TEMPLATE_VERSION}
           Environment: ${ENVIRONMENT}
           Action: ${ACTION}
           Repository: saakibsheikh1/internal-developer-platform
@@ -760,8 +1013,74 @@ jobs:
             --region "${AWS_REGION}"
 
       # ----------------------------------------------------------
+      # STAGE 5 - ONBOARDING FAILURE ALERT
+      # ----------------------------------------------------------
+
+      - name: Publish onboarding pipeline failure alert
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          SERVICE_NAME: ${{ steps.config.outputs.service_name || 'unknown-service' }}
+          TEAM_NAME: ${{ steps.config.outputs.team_name || 'unknown-team' }}
+          TEMPLATE_TYPE: ${{ steps.config.outputs.template_type || 'unknown-template' }}
+          TEMPLATE_VERSION: ${{ steps.config.outputs.template_version || 'unknown-version' }}
+          CONFIG_FILE: ${{ inputs.config_file || 'onboarding/examples/platform.yaml' }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          echo "Preparing Stage 5 onboarding failure alert."
+
+          FAILED_STEP="Unknown failed step"
+
+          JOB_DATA=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100")
+
+          FAILED_STEP=$(echo "${JOB_DATA}" | jq -r '
+            .jobs[]
+            | select(.name == "Onboard service")
+            | .steps[]
+            | select(.conclusion == "failure")
+            | .name
+          ' | head -n 1)
+
+          if [ -z "${FAILED_STEP}" ] || [ "${FAILED_STEP}" = "null" ]; then
+            FAILED_STEP="Unknown failed step"
+          fi
+
+          echo "Service: ${SERVICE_NAME}"
+          echo "Team: ${TEAM_NAME}"
+          echo "Failed step: ${FAILED_STEP}"
+
+          FAILURE_MESSAGE="IDP ONBOARDING PIPELINE FAILURE
+
+          Service: ${SERVICE_NAME}
+          Team: ${TEAM_NAME}
+          Template: ${TEMPLATE_TYPE}
+          Template Version: ${TEMPLATE_VERSION}
+          Environment: ${ENVIRONMENT:-unknown}
+          Failed Step: ${FAILED_STEP}
+          Repository: ${GITHUB_REPOSITORY}
+          Workflow Run: ${GITHUB_RUN_ID}
+          Workflow URL: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          Action required: investigate the failed onboarding step."
+
+          aws sns publish \
+            --topic-arn "${PLATFORM_ALERT_TOPIC_ARN}" \
+            --subject "IDP Onboarding Failure: ${SERVICE_NAME}" \
+            --message "${FAILURE_MESSAGE}" \
+            --region "${AWS_REGION}"
+
+          aws cloudwatch put-metric-data \
+            --namespace "IDP/Platform" \
+            --metric-data "MetricName=OnboardingPipelineFailure,Dimensions=[{Name=ServiceName,Value=${SERVICE_NAME}},{Name=FailureStep,Value=${FAILED_STEP}}],Value=1,Unit=Count" \
+            --region "${AWS_REGION}"
+
+          echo "Stage 5 onboarding failure alert published."
+
+      # ----------------------------------------------------------
       # Commit catalogue / TechDocs / Grafana
       # ----------------------------------------------------------
+
       - name: Commit catalogue and platform artifacts
         if: ${{ (inputs.action || 'apply') == 'apply' }}
         shell: bash
@@ -769,8 +1088,11 @@ jobs:
           SERVICE_NAME: ${{ steps.config.outputs.service_name }}
         run: |
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name \
+            "github-actions[bot]"
+
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add \
             "catalogue/backstage/${SERVICE_NAME}" \
@@ -793,6 +1115,7 @@ jobs:
       # ----------------------------------------------------------
       # GitHub Actions summary
       # ----------------------------------------------------------
+
       - name: Publish GitHub Actions summary
         if: always()
         shell: bash
@@ -800,6 +1123,7 @@ jobs:
           SERVICE_NAME: ${{ steps.config.outputs.service_name }}
           TEAM_NAME: ${{ steps.config.outputs.team_name }}
           TEMPLATE_TYPE: ${{ steps.config.outputs.template_type }}
+          TEMPLATE_VERSION: ${{ steps.config.outputs.template_version }}
           ENVIRONMENT: ${{ steps.config.outputs.environment }}
           ACTION: ${{ inputs.action || 'apply' }}
         run: |
@@ -812,6 +1136,7 @@ jobs:
             echo "| Service | ${SERVICE_NAME} |"
             echo "| Team | ${TEAM_NAME} |"
             echo "| Template | ${TEMPLATE_TYPE} |"
+            echo "| Template Version | ${TEMPLATE_VERSION} |"
             echo "| Environment | ${ENVIRONMENT} |"
             echo "| Action | ${ACTION} |"
             echo "| AWS Region | ${AWS_REGION} |"
@@ -833,5 +1158,7 @@ jobs:
             echo "- TechDocs: enabled"
             echo "- Grafana dashboard definition: generated"
             echo "- SNS summary: enabled"
+            echo "- Onboarding failure alert: enabled"
             echo "- Terraform offboarding: enabled"
+            echo "- Golden-path template governance: enabled"
           } >> "${GITHUB_STEP_SUMMARY}"
