@@ -69,10 +69,10 @@ jobs:
           config_path = Path("onboarding/examples/platform.yaml")
           schema_path = Path("onboarding/schemas/platform.schema.json")
 
-          with config_path.open() as f:
+          with config_path.open(encoding="utf-8-sig") as f:
               config = yaml.safe_load(f)
 
-          with schema_path.open() as f:
+          with schema_path.open(encoding="utf-8-sig") as f:
               schema = json.load(f)
 
           validate(instance=config, schema=schema)
@@ -169,11 +169,11 @@ jobs:
         env:
           CONFIG_FILE: onboarding/examples/platform.yaml
         run: |
-          SERVICE_NAME=$(python -c "import yaml; print(yaml.safe_load(open('${CONFIG_FILE}'))['service_name'])")
-          TEMPLATE_TYPE=$(python -c "import yaml; print(yaml.safe_load(open('${CONFIG_FILE}'))['template_type'])")
-          TEAM_NAME=$(python -c "import yaml; print(yaml.safe_load(open('${CONFIG_FILE}'))['team_name'])")
-          IMAGE=$(python -c "import yaml; print(yaml.safe_load(open('${CONFIG_FILE}'))['docker_image'])")
-          ENVIRONMENT=$(python -c "import yaml; print(yaml.safe_load(open('${CONFIG_FILE}'))['environment'])")
+          SERVICE_NAME=$(python -c "import yaml; print(yaml.safe_load(open('${CONFIG_FILE}', encoding='utf-8-sig'))['service_name'])")
+          TEMPLATE_TYPE=$(python -c "import yaml; print(yaml.safe_load(open('${CONFIG_FILE}', encoding='utf-8-sig'))['template_type'])")
+          TEAM_NAME=$(python -c "import yaml; print(yaml.safe_load(open('${CONFIG_FILE}', encoding='utf-8-sig'))['team_name'])")
+          IMAGE=$(python -c "import yaml; print(yaml.safe_load(open('${CONFIG_FILE}', encoding='utf-8-sig'))['docker_image'])")
+          ENVIRONMENT=$(python -c "import yaml; print(yaml.safe_load(open('${CONFIG_FILE}', encoding='utf-8-sig'))['environment'])")
 
           echo "service_name=${SERVICE_NAME}" >> "$GITHUB_OUTPUT"
           echo "template_type=${TEMPLATE_TYPE}" >> "$GITHUB_OUTPUT"
