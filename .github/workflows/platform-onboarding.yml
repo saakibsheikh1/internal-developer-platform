@@ -168,6 +168,15 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3.8.1
 
+      - name: Login to Amazon ECR
+        shell: bash
+        run: |
+          aws ecr get-login-password --region "${AWS_REGION}" \
+            | docker login \
+              --username AWS \
+              --password-stdin \
+              "495278513365.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
       - name: Read platform configuration
         id: config
         shell: bash
