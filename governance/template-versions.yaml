@@ -1,0 +1,18 @@
+apiVersion: idp.platform/v1
+kind: GoldenPathVersions
+
+templates:
+  web-service:
+    version: "1.0.0"
+    status: approved
+    path: templates/web-service
+
+  background-worker:
+    version: "1.0.0"
+    status: approved
+    path: templates/background-worker
+
+  scheduled-job:
+    version: "1.0.0"
+    status: approved
+    path: templates/scheduled-job
